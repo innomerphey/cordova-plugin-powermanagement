@@ -25,6 +25,13 @@ import org.json.JSONException;
 
 import android.content.Context;
 import android.os.PowerManager;
+import android.os.Build;
+import android.os.Handler;
+import android.app.PendingIntent;
+import android.content.Intent;
+import java.lang.Runnable;
+import android.view.View;
+			
 import android.util.Log;
 
 import org.apache.cordova.CordovaWebView;
@@ -43,14 +50,56 @@ public class PowerManagement extends CordovaPlugin {
 	private PowerManager powerManager = null;
 	private boolean releaseOnPause = true;
 
+	private Handler handler;
+	private PendingIntent wakeupIntent;
+	private CordovaWebView webView;
+
+	private final Runnable heartbeat = new Runnable() {
+	    public void run() {
+	        try {
+	        	//Log.d("PowerManagementPlugin", "About to declare ourselves VISIBLE");
+	        	webView.getEngine().getView().dispatchWindowVisibilityChanged(View.VISIBLE);
+
+	        	// if sdk is 23 (android 6) or greater
+				if(android.os.Build.VERSION.SDK_INT > 22){
+
+		            if (wakeLock != null && powerManager != null && powerManager.isDeviceIdleMode()) {
+		                //Log.d("PowerManagementPlugin", "Poking location service");
+		                try {
+		                    wakeupIntent.send();
+		                } catch (SecurityException e) {
+		                    Log.d("PowerManagementPlugin", "SecurityException : Heartbeat location manager keep-alive failed");
+		                } catch (PendingIntent.CanceledException e) {
+		                    Log.d("PowerManagementPlugin", "PendingIntent.CanceledException : Heartbeat location manager keep-alive failed");
+		                }
+		            }
+
+		        }
+
+	        } finally {
+	            if (handler != null) {
+	                handler.postDelayed(this, 10000);
+	            }
+	        }
+	    }
+	};
 	/**
 	 * Fetch a reference to the power-service when the plugin is initialized
 	 */
 	@Override
-	public void initialize(CordovaInterface cordova, CordovaWebView webView) {
-		super.initialize(cordova, webView);
+	public void initialize(CordovaInterface cordova, CordovaWebView webViewPara) {
+
+		Context context = cordova.getActivity().getApplicationContext();
+
+		this.webView = webViewPara;
+
+		super.initialize(cordova, webViewPara);
 
 		this.powerManager = (PowerManager) cordova.getActivity().getSystemService(Context.POWER_SERVICE);
+
+		handler = new Handler();
+	    wakeupIntent = PendingIntent.getBroadcast( context , 0, new Intent("com.android.internal.location.ALARM_WAKEUP"), 33554432);
+
 	}
 
 	@Override
@@ -66,9 +115,15 @@ public class PowerManagement extends CordovaPlugin {
 				if( args.length() > 0 && args.getBoolean(0) ) {
 					Log.d("PowerManagementPlugin", "Only dim lock" );
 					result = this.acquire( PowerManager.SCREEN_DIM_WAKE_LOCK );
-				}
-				else {
+					handler.postDelayed(heartbeat, 10000);					   
+				} else if (args.length() > 1 && args.getBoolean(1) ) {
+					Log.d("PowerManagementPlugin", "Partial wake lock" );
+					result = this.acquire( PowerManager.PARTIAL_WAKE_LOCK );
+					handler.postDelayed(heartbeat, 10000); 
+				} else {
+					Log.d("PowerManagementPlugin", "Full wake lock" );
 					result = this.acquire( PowerManager.FULL_WAKE_LOCK );
+					handler.postDelayed(heartbeat, 10000);
 				}
 			} else if( action.equals("release") ) {
 				result = this.release();
@@ -146,6 +201,7 @@ public class PowerManagement extends CordovaPlugin {
 	@Override
 	public void onPause(boolean multitasking) {
 		if( this.releaseOnPause && this.wakeLock != null ) {
+			Log.d("PowerManagementPlugin", "Wake lock pause release" );
 			this.wakeLock.release();
 		}
 
@@ -158,6 +214,7 @@ public class PowerManagement extends CordovaPlugin {
 	@Override
 	public void onResume(boolean multitasking) {
 		if( this.releaseOnPause && this.wakeLock != null ) {
+			Log.d("PowerManagementPlugin", "Wake lock resume acquire" );
 			this.wakeLock.acquire();
 		}
 

@@ -27,6 +27,18 @@ PowerManagement.prototype.acquire = function(successCallback,failureCallback, ru
     cordova.exec(successCallback, failureCallback, 'PowerManagement', 'acquire', [runLockScreen]);
 }
 
+
+/**
+ * Acquire a new wake-lock (keep device awake)
+ *
+ * @param successCallback function to be called when the wake-lock was acquired successfully
+ * @param errorCallback function to be called when there was a problem with acquiring the wake-lock
+ */
+PowerManagement.prototype.partial = function(successCallback,failureCallback) { 
+    cordova.exec(successCallback, failureCallback, 'PowerManagement', 'acquire', [false, true]);
+}
+
+
 /**
  * Release the wake-lock
  *

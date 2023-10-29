@@ -7,14 +7,14 @@
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/Viras-/cordova-plugin-powermanagement.git"
+        "url": "git+https://github.com/innomerphey/cordova-plugin-powermanagement.git"
     },
     "author": "Viras-",
     "license": "Apache-2.0",
     "bugs": {
-        "url": "https://github.com/Viras-/cordova-plugin-powermanagement/issues"
+        "url": "https://github.com/innomerphey/cordova-plugin-powermanagement/issues"
     },
-    "homepage": "https://github.com/Viras-/cordova-plugin-powermanagement#readme",
+    "homepage": "https://github.com/innomerphey/cordova-plugin-powermanagement#readme",
     "keywords": [
         "ecosystem:cordova",
         "cordova-android",

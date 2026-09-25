@@ -24,14 +24,11 @@ import org.json.JSONArray;
 import org.json.JSONException;
 
 import android.content.Context;
-import android.os.PowerManager;
-import android.os.Build;
 import android.os.Handler;
-import android.app.PendingIntent;
-import android.content.Intent;
-import java.lang.Runnable;
+import android.os.Looper;
+import android.os.PowerManager;
 import android.view.View;
-			
+
 import android.util.Log;
 
 import org.apache.cordova.CordovaWebView;
@@ -51,55 +48,65 @@ public class PowerManagement extends CordovaPlugin {
 	private boolean releaseOnPause = true;
 
 	private Handler handler;
-	private PendingIntent wakeupIntent;
 	private CordovaWebView webView;
+	private String wakeLockTag;
+	private boolean heartbeatActive = false;
 
+	/**
+	 * Visibility keep-alive only. Does not use private ALARM_WAKEUP PendingIntents
+	 * (rejected under modern target SDK / mutable-implicit PendingIntent rules).
+	 */
 	private final Runnable heartbeat = new Runnable() {
-	    public void run() {
-	        try {
-	        	//Log.d("PowerManagementPlugin", "About to declare ourselves VISIBLE");
-	        	webView.getEngine().getView().dispatchWindowVisibilityChanged(View.VISIBLE);
-
-	        	// if sdk is 23 (android 6) or greater
-				if(android.os.Build.VERSION.SDK_INT > 22){
-
-		            if (wakeLock != null && powerManager != null && powerManager.isDeviceIdleMode()) {
-		                //Log.d("PowerManagementPlugin", "Poking location service");
-		                try {
-		                    wakeupIntent.send();
-		                } catch (SecurityException e) {
-		                    Log.d("PowerManagementPlugin", "SecurityException : Heartbeat location manager keep-alive failed");
-		                } catch (PendingIntent.CanceledException e) {
-		                    Log.d("PowerManagementPlugin", "PendingIntent.CanceledException : Heartbeat location manager keep-alive failed");
-		                }
-		            }
-
-		        }
-
-	        } finally {
-	            if (handler != null) {
-	                handler.postDelayed(this, 10000);
-	            }
-	        }
-	    }
+		public void run() {
+			if (!heartbeatActive) {
+				return;
+			}
+			try {
+				final CordovaWebView wv = webView;
+				if (wv != null && wv.getEngine() != null) {
+					final View view = wv.getEngine().getView();
+					if (view != null) {
+						// Handler is bound to the main looper; View APIs require the UI thread.
+						view.dispatchWindowVisibilityChanged(View.VISIBLE);
+					}
+				}
+			} catch (Exception e) {
+				Log.d("PowerManagementPlugin", "Heartbeat visibility dispatch failed: " + e.getMessage());
+			} finally {
+				if (heartbeatActive && handler != null) {
+					handler.postDelayed(this, 10000);
+				}
+			}
+		}
 	};
+
 	/**
 	 * Fetch a reference to the power-service when the plugin is initialized
 	 */
 	@Override
 	public void initialize(CordovaInterface cordova, CordovaWebView webViewPara) {
-
-		Context context = cordova.getActivity().getApplicationContext();
-
-		this.webView = webViewPara;
-
 		super.initialize(cordova, webViewPara);
 
+		this.webView = webViewPara;
 		this.powerManager = (PowerManager) cordova.getActivity().getSystemService(Context.POWER_SERVICE);
+		// Main looper so visibility dispatch and cancel/removeCallbacks are UI-thread safe.
+		this.handler = new Handler(Looper.getMainLooper());
+		this.wakeLockTag = cordova.getActivity().getPackageName() + ":PowerManagement";
+	}
 
-		handler = new Handler();
-	    wakeupIntent = PendingIntent.getBroadcast( context , 0, new Intent("com.android.internal.location.ALARM_WAKEUP"), 33554432);
+	private void startHeartbeat() {
+		heartbeatActive = true;
+		if (handler != null) {
+			handler.removeCallbacks(heartbeat);
+			handler.postDelayed(heartbeat, 10000);
+		}
+	}
 
+	private void stopHeartbeat() {
+		heartbeatActive = false;
+		if (handler != null) {
+			handler.removeCallbacks(heartbeat);
+		}
 	}
 
 	@Override
@@ -115,15 +122,12 @@ public class PowerManagement extends CordovaPlugin {
 				if( args.length() > 0 && args.getBoolean(0) ) {
 					Log.d("PowerManagementPlugin", "Only dim lock" );
 					result = this.acquire( PowerManager.SCREEN_DIM_WAKE_LOCK );
-					handler.postDelayed(heartbeat, 10000);					   
 				} else if (args.length() > 1 && args.getBoolean(1) ) {
 					Log.d("PowerManagementPlugin", "Partial wake lock" );
 					result = this.acquire( PowerManager.PARTIAL_WAKE_LOCK );
-					handler.postDelayed(heartbeat, 10000); 
 				} else {
 					Log.d("PowerManagementPlugin", "Full wake lock" );
 					result = this.acquire( PowerManager.FULL_WAKE_LOCK );
-					handler.postDelayed(heartbeat, 10000);
 				}
 			} else if( action.equals("release") ) {
 				result = this.release();
@@ -153,12 +157,16 @@ public class PowerManagement extends CordovaPlugin {
 		PluginResult result = null;
 
 		if (this.wakeLock == null) {
-			this.wakeLock = this.powerManager.newWakeLock(p_flags, "PowerManagementPlugin");
+			this.wakeLock = this.powerManager.newWakeLock(p_flags, this.wakeLockTag);
 			try {
+				// No acquire timeout: SHD holds a partial lock across long sync sessions
+				// and releases explicitly. A timeout without safe renewal would drop the lock.
 				this.wakeLock.acquire();
+				this.startHeartbeat();
 				result = new PluginResult(PluginResult.Status.OK);
 			}
 			catch( Exception e ) {
+				this.stopHeartbeat();
 				this.wakeLock = null;
 				result = new PluginResult(PluginResult.Status.ERROR,"Can't acquire wake-lock - check your permissions!");
 			}
@@ -177,9 +185,13 @@ public class PowerManagement extends CordovaPlugin {
 	private PluginResult release() {
 		PluginResult result = null;
 
+		this.stopHeartbeat();
+
 		if( this.wakeLock != null ) {
 			try {
-				this.wakeLock.release();
+				if (this.wakeLock.isHeld()) {
+					this.wakeLock.release();
+				}
 				result = new PluginResult(PluginResult.Status.OK, "OK");
 			}
 			catch (Exception e) {
@@ -202,7 +214,10 @@ public class PowerManagement extends CordovaPlugin {
 	public void onPause(boolean multitasking) {
 		if( this.releaseOnPause && this.wakeLock != null ) {
 			Log.d("PowerManagementPlugin", "Wake lock pause release" );
-			this.wakeLock.release();
+			this.stopHeartbeat();
+			if (this.wakeLock.isHeld()) {
+				this.wakeLock.release();
+			}
 		}
 
 		super.onPause(multitasking);
@@ -215,9 +230,28 @@ public class PowerManagement extends CordovaPlugin {
 	public void onResume(boolean multitasking) {
 		if( this.releaseOnPause && this.wakeLock != null ) {
 			Log.d("PowerManagementPlugin", "Wake lock resume acquire" );
-			this.wakeLock.acquire();
+			if (!this.wakeLock.isHeld()) {
+				this.wakeLock.acquire();
+			}
+			this.startHeartbeat();
 		}
 
 		super.onResume(multitasking);
+	}
+
+	@Override
+	public void onDestroy() {
+		this.stopHeartbeat();
+		if (this.wakeLock != null) {
+			try {
+				if (this.wakeLock.isHeld()) {
+					this.wakeLock.release();
+				}
+			} catch (Exception e) {
+				Log.d("PowerManagementPlugin", "WakeLock release on destroy failed: " + e.getMessage());
+			}
+			this.wakeLock = null;
+		}
+		super.onDestroy();
 	}
 }
